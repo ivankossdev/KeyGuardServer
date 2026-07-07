@@ -1,0 +1,14 @@
+/home/ivan/developer/DotnetCore/KeyGuardTcpServer/bin/Debug/net10.0/KeyGuardTcpServer
+/home/ivan/developer/DotnetCore/KeyGuardTcpServer/bin/Debug/net10.0/KeyGuardTcpServer.deps.json
+/home/ivan/developer/DotnetCore/KeyGuardTcpServer/bin/Debug/net10.0/KeyGuardTcpServer.runtimeconfig.json
+/home/ivan/developer/DotnetCore/KeyGuardTcpServer/bin/Debug/net10.0/KeyGuardTcpServer.dll
+/home/ivan/developer/DotnetCore/KeyGuardTcpServer/bin/Debug/net10.0/KeyGuardTcpServer.pdb
+/home/ivan/developer/DotnetCore/KeyGuardTcpServer/obj/Debug/net10.0/KeyGuardTcpServer.GeneratedMSBuildEditorConfig.editorconfig
+/home/ivan/developer/DotnetCore/KeyGuardTcpServer/obj/Debug/net10.0/KeyGuardTcpServer.AssemblyInfoInputs.cache
+/home/ivan/developer/DotnetCore/KeyGuardTcpServer/obj/Debug/net10.0/KeyGuardTcpServer.AssemblyInfo.cs
+/home/ivan/developer/DotnetCore/KeyGuardTcpServer/obj/Debug/net10.0/KeyGuardTcpServer.csproj.CoreCompileInputs.cache
+/home/ivan/developer/DotnetCore/KeyGuardTcpServer/obj/Debug/net10.0/KeyGuardTcpServer.dll
+/home/ivan/developer/DotnetCore/KeyGuardTcpServer/obj/Debug/net10.0/refint/KeyGuardTcpServer.dll
+/home/ivan/developer/DotnetCore/KeyGuardTcpServer/obj/Debug/net10.0/KeyGuardTcpServer.pdb
+/home/ivan/developer/DotnetCore/KeyGuardTcpServer/obj/Debug/net10.0/KeyGuardTcpServer.genruntimeconfig.cache
+/home/ivan/developer/DotnetCore/KeyGuardTcpServer/obj/Debug/net10.0/ref/KeyGuardTcpServer.dll
