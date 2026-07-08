@@ -27,7 +27,6 @@ namespace KeyGuardTcpServer
             _server = server ?? throw new ArgumentNullException(nameof(server));
             _stream = client.GetStream() ?? throw new InvalidOperationException("Unable to get network stream");
 
-            // Исправлено: используем ToString() и null-conditional
             var remoteEndPoint = client.Client?.RemoteEndPoint;
             Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Клиент подключён: {remoteEndPoint?.ToString() ?? "unknown"}");
         }
@@ -92,7 +91,6 @@ namespace KeyGuardTcpServer
                 byte[] telegram = _accumulator.GetRange(0, totalPacketSize).ToArray();
                 _accumulator.RemoveRange(0, totalPacketSize);
 
-                // Исправлено: создаём fallback EndPoint
                 var remoteEndPoint = _client.Client?.RemoteEndPoint ?? new IPEndPoint(IPAddress.Any, 0);
                 _server.OnTelegramReceived(telegram, remoteEndPoint, this);
             }

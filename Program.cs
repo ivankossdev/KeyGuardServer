@@ -1,85 +1,84 @@
 ﻿using System;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.Linq;
-using System.Net;
-using System.Net.Sockets;
-using System.Text;
-using System.Threading;
 using System.Threading.Tasks;
 
 namespace KeyGuardTcpServer
-{   
-    // ------------------- Основная программа -------------------
+{
     class Program
     {
-        static async Task Main(string[] args)
+        static void Main(string[] args)
         {
-            int port = 8000; // можно изменить
+            int port = 8000;
             var server = new KeyGuardTcpServer(port);
 
-            // Подписываемся на получение телеграмм
+            var sessions = new ConcurrentDictionary<uint, ClientSession>();
+
             server.TelegramReceived += async (sender, e) =>
             {
-                // e.Telegram – полный пакет с маркерами
-                // Парсим заголовок
-                byte[] data = e.Telegram;
-                int offset = 4; // пропускаем start
+                // Парсим телеграмму (payload может быть null)
+                if (!TelegramHelper.ParseTelegram(e.Telegram, out var header, out byte[]? payload))
+                {
+                    Console.WriteLine("Не удалось разобрать телеграмму.");
+                    return;
+                }
 
-                ushort encrType = BitConverter.ToUInt16(data, offset); offset += 2;
-                ushort notUsed = BitConverter.ToUInt16(data, offset); offset += 2;
-                uint iv = BitConverter.ToUInt32(data, offset); offset += 4;
-                ushort dstReal = BitConverter.ToUInt16(data, offset); offset += 2;
-                byte life = data[offset]; offset++;
-                byte vers = data[offset]; offset++;
-                ushort len = BitConverter.ToUInt16(data, offset); offset += 2;
-                uint src = BitConverter.ToUInt32(data, offset); offset += 4;
-                uint dst = BitConverter.ToUInt32(data, offset); offset += 4;
-                ushort refNum = BitConverter.ToUInt16(data, offset); offset += 2;
-                byte bcc = data[offset]; offset++;
-                byte cmd_t = data[offset]; offset++;
-                byte ident = data[offset]; offset++;
-                byte value = data[offset]; offset++;
-                uint time = BitConverter.ToUInt32(data, offset); offset += 4;
-                uint acnt = BitConverter.ToUInt32(data, offset); offset += 4;
+                // На случай, если payload всё же null (хотя по логике не должно)
+                if (payload is null)
+                {
+                    Console.WriteLine("Payload is null, хотя парсинг успешен.");
+                    return;
+                }
 
-                // Полезная нагрузка (data[])
-                byte[] payload = new byte[len - 32];
-                Array.Copy(data, offset, payload, 0, payload.Length);
+                // Сохраняем сессию
+                if (header.Src != 0 && header.Src != 0xF0000000)
+                {
+                    sessions[header.Src] = e.Session;
+                }
 
                 Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Получена телеграмма от {e.RemoteEndPoint}:");
-                Console.WriteLine($"  Cmd=0x{cmd_t:X2}, Ident=0x{ident:X2}, Value=0x{value:X2}, Ref={refNum}, Src=0x{src:X8}, Dst=0x{dst:X8}");
-                Console.WriteLine($"  Payload (первые 16 байт): {BitConverter.ToString(payload.Take(16).ToArray())}");
+                Console.WriteLine($"  Cmd=0x{header.Cmd:X2}, Ident=0x{header.Ident:X2}, Value=0x{header.Value:X2}, Ref={header.Ref}, Src=0x{header.Src:X8}, Dst=0x{header.Dst:X8}");
+                Console.WriteLine($"  Payload (первые 16 байт): {BitConverter.ToString(payload.Length > 16 ? payload[0..16] : payload)}");
 
-                // ------------------- Обработка WatchDog (проверка связи) -------------------
-                // Если это запрос WatchDog (Cmd_t=0xA2, Ident=0xE5, Value=0x31)
-                if (cmd_t == 0xA2 && ident == 0xE5 && value == 0x31)
+                // Обработка WatchDog
+                if (header.Cmd == 0xA2 && header.Ident == 0xE5 && header.Value == 0x31)
                 {
                     Console.WriteLine("  -> Отвечаем на WatchDog");
-                    // Формируем ответ: меняем cmd_t на 0xA3, src и dst местами
-                    byte[] response = (byte[])data.Clone();
-                    // Меняем cmd_t (байт на позиции 22? нужно точно рассчитать)
-                    // В нашем offset после парсинга мы можем перезаписать байты в нужных местах.
-                    // Смещение cmd_t внутри пакета: начало заголовка + смещение до cmd_t.
-                    // Заголовок начинается с 4-го байта (после start).
-                    // Смещение cmd_t внутри заголовка: 4 (encrType) +2 +2 +4 +2 +1 +1 +2 +4 +4 +2 +1 = 29? Проверим.
-                    // Лучше использовать готовые смещения, которые мы вычислили при парсинге.
-                    // Пересоздадим массив для ответа, скопировав исходный.
-                    byte[] responseData = new byte[data.Length];
-                    Array.Copy(data, responseData, data.Length);
-                    // Поменяем местами src (байты 26..29) и dst (байты 30..33) — примерно.
-                    // В протоколе src = 4 байта после len (len на позиции 18-19? Надо точно считать.
-                    // Для простоты используем позиции, вычисленные при разборе:
-                    // после парсинга мы знаем смещение, но проще использовать готовый метод,
-                    // который создаёт новый массив с изменёнными полями.
-                    // Для краткости я оставлю комментарий и отправлю эхо-пакет без изменения (но это неверно).
-                    // Лучше отправлять корректный ответ. Я реализую простой метод создания ответа.
-                    byte[] ack = BuildWatchDogResponse(data, src, dst, refNum);
+                    byte[] ack = TelegramHelper.BuildWatchDogResponse(e.Telegram, header.Src, header.Dst, header.Ref);
                     await e.Session.SendAsync(ack);
+                }
+
+                // Пример управления: при Card Present открываем дверцу
+                if (header.Cmd == 0x80 && header.Ident == 0x03 && header.Value == 0x80)
+                {
+                    // Проверяем длину payload
+                    if (payload.Length >= 4)
+                    {
+                        uint readerAddr = BitConverter.ToUInt32(payload, 0);
+                        Console.WriteLine($"  -> Карта приложена к считывателю {readerAddr}. Открываем дверцу...");
+
+                        byte[] openDoorPayload = BitConverter.GetBytes(readerAddr);
+                        byte[] command = TelegramHelper.BuildCommandTelegram(
+                            dstSerial: header.Src,
+                            ident: 0x03,
+                            value: 0x35,
+                            acnt: 0,
+                            payload: openDoorPayload
+                        );
+
+                        await e.Session.SendAsync(command);
+                        Console.WriteLine("  -> Команда открытия двери отправлена.");
+                    }
+                    else
+                    {
+                        Console.WriteLine("  -> Payload слишком короткий для чтения адреса считывателя.");
+                    }
                 }
             };
 
             server.Start();
+
+            // Интерактивная консоль
+            _ = Task.Run(() => InteractiveConsole(sessions));
 
             Console.WriteLine("Нажмите любую клавишу для остановки...");
             Console.ReadKey();
@@ -87,31 +86,81 @@ namespace KeyGuardTcpServer
             server.Dispose();
         }
 
-        // Вспомогательный метод: создаёт ответ на WatchDog
-        static byte[] BuildWatchDogResponse(byte[] request, uint src, uint dst, ushort refNum)
+        private static async Task InteractiveConsole(ConcurrentDictionary<uint, ClientSession> sessions)
         {
-            // Копируем исходный пакет
-            byte[] response = (byte[])request.Clone();
+            while (true)
+            {
+                Console.WriteLine("\nВведите команду:");
+                Console.WriteLine("  open <serial> <reader>  - открыть дверцу (например: open 0x33A4 1)");
+                Console.WriteLine("  issue <serial> <key>    - выдать ключ (например: issue 0x33A4 1)");
+                Console.WriteLine("  return <serial> <key>   - сдать ключ");
+                Console.WriteLine("  list                    - список подключённых устройств");
+                Console.WriteLine("  exit                    - выход");
 
-            // Меняем cmd_t (байт, где лежит cmd_t). Найдём его смещение.
-            // В заголовке: start (4) + encrType(2) + notUsed(2) + iv(4) + dstReal(2) + life(1) + vers(1) + len(2) + src(4) + dst(4) + ref(2) + bcc(1)
-            // Суммируем: 4+2+2+4+2+1+1+2 = 18, затем src (4) = 22, dst (4) = 26, ref (2) = 28, bcc (1) = 29, cmd_t = 30.
-            // Проверим: смещение 30 от начала пакета.
-            int cmdOffset = 30;
-            // Меняем команду с 0xA2 на 0xA3
-            response[cmdOffset] = 0xA3;
+                string? input = Console.ReadLine();
+                if (string.IsNullOrEmpty(input)) continue;
 
-            // Меняем местами src и dst: src занимает байты 22-25, dst 26-29
-            // Копируем src во временный массив
-            byte[] tmpSrc = new byte[4];
-            Array.Copy(response, 22, tmpSrc, 0, 4);
-            Array.Copy(response, 26, response, 22, 4);
-            Array.Copy(tmpSrc, 0, response, 26, 4);
+                string[] parts = input.Split(' ');
+                string command = parts[0].ToLower();
 
-            // ref оставляем тот же, время можно не менять.
-            // bcc оставляем как есть (если шифрование выключено, это не важно)
+                if (command == "exit") break;
 
-            return response;
+                if (command == "list")
+                {
+                    Console.WriteLine("Подключённые устройства (src):");
+                    foreach (var kv in sessions)
+                        Console.WriteLine($"  {kv.Key:X8} - сессия {kv.Value.Id}");
+                    continue;
+                }
+
+                if (parts.Length < 3)
+                {
+                    Console.WriteLine("Недостаточно аргументов.");
+                    continue;
+                }
+
+                string serialStr = parts[1];
+                uint serial;
+                if (serialStr.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+                    serial = Convert.ToUInt32(serialStr.Substring(2), 16);
+                else
+                    serial = Convert.ToUInt32(serialStr);
+
+                if (!sessions.TryGetValue(serial, out ClientSession? session))
+                {
+                    Console.WriteLine($"Устройство с серийным номером 0x{serial:X8} не найдено.");
+                    continue;
+                }
+
+                uint addr = Convert.ToUInt32(parts[2]);
+
+                byte[] payload = BitConverter.GetBytes(addr);
+                byte cmdIdent = 0;
+                byte cmdValue = 0;
+
+                switch (command)
+                {
+                    case "open":
+                        cmdIdent = 0x03;
+                        cmdValue = 0x35;
+                        break;
+                    case "issue":
+                        cmdIdent = 0x0F;
+                        cmdValue = 0x32;
+                        break;
+                    case "return":
+                        cmdIdent = 0x0F;
+                        cmdValue = 0x72;
+                        break;
+                    default:
+                        Console.WriteLine("Неизвестная команда.");
+                        continue;
+                }
+
+                byte[] commandBytes = TelegramHelper.BuildCommandTelegram(serial, cmdIdent, cmdValue, 0, payload);
+                await session.SendAsync(commandBytes);
+                Console.WriteLine($"Команда отправлена устройству 0x{serial:X8}");
+            }
         }
     }
 }

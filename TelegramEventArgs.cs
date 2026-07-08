@@ -1,16 +1,8 @@
 using System;
-using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.Linq;
 using System.Net;
-using System.Net.Sockets;
-using System.Text;
-using System.Threading;
-using System.Threading.Tasks;
 
 namespace KeyGuardTcpServer
 {
-    // ------------------- Аргументы события с телеграммой -------------------
     public class TelegramEventArgs : EventArgs
     {
         public byte[] Telegram { get; }
@@ -19,9 +11,9 @@ namespace KeyGuardTcpServer
 
         public TelegramEventArgs(byte[] telegram, EndPoint remoteEndPoint, ClientSession session)
         {
-            Telegram = telegram;
-            RemoteEndPoint = remoteEndPoint;
-            Session = session;
+            Telegram = telegram ?? throw new ArgumentNullException(nameof(telegram));
+            RemoteEndPoint = remoteEndPoint ?? throw new ArgumentNullException(nameof(remoteEndPoint));
+            Session = session ?? throw new ArgumentNullException(nameof(session));
         }
     }
 }

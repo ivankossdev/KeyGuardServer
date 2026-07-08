@@ -13,7 +13,6 @@ namespace KeyGuardTcpServer
         private readonly CancellationTokenSource _cts = new CancellationTokenSource();
         private readonly ConcurrentDictionary<Guid, ClientSession> _sessions = new ConcurrentDictionary<Guid, ClientSession>();
 
-        // Инициализация события для устранения CS8618
         public event EventHandler<TelegramEventArgs> TelegramReceived = delegate { };
 
         public KeyGuardTcpServer(int port)
