@@ -129,6 +129,20 @@ namespace KeyGuardTcpServer
 
             return response;
         }
+        
+        /// <summary>
+        /// Формирует команду чтения элемента базы данных.
+        /// </summary>
+        /// <param name="dstSerial">Серийный номер устройства (src из входящей телеграммы).</param>
+        /// <param name="ident">Тип элемента (0x0E для KeyList, 0x0F для Key и т.д.).</param>
+        /// <param name="addr">Адрес (индекс) элемента для чтения (начинается с 1).</param>
+        /// <param name="acnt">Номер пользователя (если нужен).</param>
+        /// <returns>Массив байтов готовой телеграммы.</returns>
+        public static byte[] BuildReadCommand(uint dstSerial, byte ident, uint addr, uint acnt = 0)
+        {
+            byte[] payload = BitConverter.GetBytes(addr);
+            return BuildCommandTelegram(dstSerial, ident, 0xE2, acnt, payload);
+        }
     }
 
     public struct TelegramHeader
