@@ -124,6 +124,7 @@ namespace KeyGuardTcpServer
 
         public async Task SendAsync(byte[] telegram)
         {
+            Console.WriteLine($"  Отправка: {BitConverter.ToString(telegram)}");
             if (telegram == null)
                 throw new ArgumentNullException(nameof(telegram));
 

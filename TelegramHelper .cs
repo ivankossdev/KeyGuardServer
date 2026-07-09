@@ -89,7 +89,7 @@ namespace KeyGuardTcpServer
                 ms.Write(BitConverter.GetBytes((uint)0), 0, 4);   // IV
                 ms.Write(BitConverter.GetBytes((ushort)0), 0, 2); // dst_real
                 ms.WriteByte(0); // life
-                ms.WriteByte(2); // vers (без шифрования)
+                ms.WriteByte(0); // vers (без шифрования)
                 ms.Write(BitConverter.GetBytes(len), 0, 2);
 
                 ms.Write(BitConverter.GetBytes((uint)0xF0000000), 0, 4); // src (сервер)
@@ -141,9 +141,207 @@ namespace KeyGuardTcpServer
         public static byte[] BuildReadCommand(uint dstSerial, byte ident, uint addr, uint acnt = 0)
         {
             byte[] payload = BitConverter.GetBytes(addr);
-            return BuildCommandTelegram(dstSerial, ident, 0xE2, acnt, payload);
+            return BuildDatabaseCommand(dstSerial, ident, 0xE2, acnt, payload);
+        }
+        
+        /// <summary>
+        /// Формирует запрос состояния (Inquiry Single) с Cmd_t = 0x82.
+        /// </summary>
+        public static byte[] BuildInquiryCommand(uint dstSerial, byte ident, byte value, uint acnt = 0, byte[]? payload = null)
+        {
+            if (payload == null || payload.Length == 0)
+                payload = new byte[4] { 0, 0, 0, 0 };
+
+            ushort len = (ushort)(32 + payload.Length);
+            ushort refNum = GetNextRef();
+
+            using (var ms = new MemoryStream())
+            {
+                // Start marker
+                ms.Write(new byte[] { 0xA5, 0x5A, 0xB6, 0x6B }, 0, 4);
+
+                // Заголовок
+                ms.Write(BitConverter.GetBytes((ushort)0), 0, 2); // encr_type
+                ms.Write(BitConverter.GetBytes((ushort)0), 0, 2); // not_used
+                ms.Write(BitConverter.GetBytes((uint)0), 0, 4);   // IV
+                ms.Write(BitConverter.GetBytes((ushort)0), 0, 2); // dst_real
+                ms.WriteByte(0); // life
+                ms.WriteByte(0); // vers
+                ms.Write(BitConverter.GetBytes(len), 0, 2);
+
+                ms.Write(BitConverter.GetBytes((uint)0xF0000000), 0, 4); // src (сервер)
+                ms.Write(BitConverter.GetBytes(dstSerial), 0, 4); // dst
+                ms.Write(BitConverter.GetBytes(refNum), 0, 2);
+                ms.WriteByte(0); // bcc
+                ms.WriteByte(0x82); // cmd_t = Inquiry Single
+                ms.WriteByte(ident);
+                ms.WriteByte(value);
+                ms.Write(BitConverter.GetBytes((uint)0), 0, 4); // time
+                ms.Write(BitConverter.GetBytes(acnt), 0, 4);
+
+                ms.Write(payload, 0, payload.Length);
+
+                // End marker
+                ms.Write(new byte[] { 0xB8, 0x8B, 0xC9, 0x9C }, 0, 4);
+
+                return ms.ToArray();
+            }
+        }
+
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="dstSerial"></param>
+        /// <param name="ident"></param>
+        /// <param name="value"></param>
+        /// <param name="acnt"></param>
+        /// <param name="payload"></param>
+        /// <returns></returns>
+        public static byte[] BuildDatabaseCommand(uint dstSerial, byte ident, byte value, uint acnt = 0, byte[]? payload = null)
+        {
+            if (payload == null || payload.Length == 0)
+                payload = new byte[4] { 0, 0, 0, 0 };
+
+            ushort len = (ushort)(32 + payload.Length);
+            ushort refNum = GetNextRef();
+
+            using (var ms = new MemoryStream())
+            {
+                ms.Write(new byte[] { 0xA5, 0x5A, 0xB6, 0x6B }, 0, 4);
+
+                ms.Write(BitConverter.GetBytes((ushort)0), 0, 2);
+                ms.Write(BitConverter.GetBytes((ushort)0), 0, 2);
+                ms.Write(BitConverter.GetBytes((uint)0), 0, 4);
+                ms.Write(BitConverter.GetBytes((ushort)0), 0, 2);
+                ms.WriteByte(0);
+                ms.WriteByte(0); //vers
+                ms.Write(BitConverter.GetBytes(len), 0, 2);
+
+                ms.Write(BitConverter.GetBytes((uint)0xF0000000), 0, 4);
+                ms.Write(BitConverter.GetBytes(dstSerial), 0, 4);
+                ms.Write(BitConverter.GetBytes(refNum), 0, 2);
+                ms.WriteByte(0);
+                ms.WriteByte(0x91); // cmd_t = 0x91 для работы с БД
+                ms.WriteByte(ident);
+                ms.WriteByte(value);
+                ms.Write(BitConverter.GetBytes((uint)0), 0, 4);
+                ms.Write(BitConverter.GetBytes(acnt), 0, 4);
+
+                ms.Write(payload, 0, payload.Length);
+
+                ms.Write(new byte[] { 0xB8, 0x8B, 0xC9, 0x9C }, 0, 4);
+
+                return ms.ToArray();
+            }
+        }
+
+        public static byte[] BuildDeviceInquiryCommand(uint dstSerial, byte ident, byte value, uint acnt = 0, byte[]? payload = null)
+        {
+            if (payload == null || payload.Length == 0)
+                payload = new byte[4] { 0, 0, 0, 0 };
+
+            ushort len = (ushort)(32 + payload.Length);
+            ushort refNum = GetNextRef();
+
+            using (var ms = new MemoryStream())
+            {
+                ms.Write(new byte[] { 0xA5, 0x5A, 0xB6, 0x6B }, 0, 4);
+                ms.Write(BitConverter.GetBytes((ushort)0), 0, 2);
+                ms.Write(BitConverter.GetBytes((ushort)0), 0, 2);
+                ms.Write(BitConverter.GetBytes((uint)0), 0, 4);
+                ms.Write(BitConverter.GetBytes((ushort)0), 0, 2);
+                ms.WriteByte(0);
+                ms.WriteByte(0); //vers
+                ms.Write(BitConverter.GetBytes(len), 0, 2);
+                ms.Write(BitConverter.GetBytes((uint)0xF0000000), 0, 4);
+                ms.Write(BitConverter.GetBytes(dstSerial), 0, 4);
+                ms.Write(BitConverter.GetBytes(refNum), 0, 2);
+                ms.WriteByte(0);
+                ms.WriteByte(0xF2); // Inquiry Single для работы с устройством
+                ms.WriteByte(ident);
+                ms.WriteByte(value);
+                ms.Write(BitConverter.GetBytes((uint)0), 0, 4);
+                ms.Write(BitConverter.GetBytes(acnt), 0, 4);
+                ms.Write(payload, 0, payload.Length);
+                ms.Write(new byte[] { 0xB8, 0x8B, 0xC9, 0x9C }, 0, 4);
+                return ms.ToArray();
+            }
+        }
+
+        public static byte[] BuildDeviceStatusCommand(uint dstSerial)
+        {
+            byte[] payload = new byte[4] { 0, 0, 0, 0 };
+            ushort len = (ushort)(32 + payload.Length);
+            ushort refNum = GetNextRef();
+
+            using (var ms = new MemoryStream())
+            {
+                ms.Write(new byte[] { 0xA5, 0x5A, 0xB6, 0x6B }, 0, 4);
+
+                ms.Write(BitConverter.GetBytes((ushort)0), 0, 2);
+                ms.Write(BitConverter.GetBytes((ushort)0), 0, 2);
+                ms.Write(BitConverter.GetBytes((uint)0), 0, 4);
+                ms.Write(BitConverter.GetBytes((ushort)0), 0, 2);
+                ms.WriteByte(0);
+                ms.WriteByte(0); //vers 
+                ms.Write(BitConverter.GetBytes(len), 0, 2);
+
+                ms.Write(BitConverter.GetBytes((uint)0xF0000000), 0, 4);
+                ms.Write(BitConverter.GetBytes(dstSerial), 0, 4);
+                ms.Write(BitConverter.GetBytes(refNum), 0, 2);
+                ms.WriteByte(0);
+                ms.WriteByte(0xF2); // cmd_t = Inquiry Single для устройства
+                ms.WriteByte(0x00); // ident
+                ms.WriteByte(0xF0); // value = Value_state
+                ms.Write(BitConverter.GetBytes((uint)0), 0, 4);
+                ms.Write(BitConverter.GetBytes((uint)0), 0, 4);
+
+                ms.Write(payload, 0, payload.Length);
+
+                ms.Write(new byte[] { 0xB8, 0x8B, 0xC9, 0x9C }, 0, 4);
+
+                return ms.ToArray();
+            }
+        }
+
+        public static byte[] BuildLogOnCommand(uint dstSerial, uint sysNumber = 0)
+        {
+            byte[] payload = new byte[16]; // 4 байта sys_number + 12 байт IV
+            Buffer.BlockCopy(BitConverter.GetBytes(sysNumber), 0, payload, 0, 4);
+            // IV заполняем нулями (или можно сгенерировать случайные)
+            // В реальном проекте здесь должен быть 12-байтовый вектор инициализации
+            // Для теста оставляем нули
+
+            ushort len = (ushort)(32 + payload.Length);
+            ushort refNum = GetNextRef();
+
+            using (var ms = new MemoryStream())
+            {
+                ms.Write(new byte[] { 0xA5, 0x5A, 0xB6, 0x6B }, 0, 4);
+                ms.Write(BitConverter.GetBytes((ushort)0), 0, 2);
+                ms.Write(BitConverter.GetBytes((ushort)0), 0, 2);
+                ms.Write(BitConverter.GetBytes((uint)0), 0, 4);
+                ms.Write(BitConverter.GetBytes((ushort)0), 0, 2);
+                ms.WriteByte(0);
+                ms.WriteByte(0); // vers = 0
+                ms.Write(BitConverter.GetBytes(len), 0, 2);
+                ms.Write(BitConverter.GetBytes((uint)0xF0000000), 0, 4);
+                ms.Write(BitConverter.GetBytes(dstSerial), 0, 4);
+                ms.Write(BitConverter.GetBytes(refNum), 0, 2);
+                ms.WriteByte(0);
+                ms.WriteByte(0xA1); // cmd_t = Command
+                ms.WriteByte(0xE0); // Ident = LogOn
+                ms.WriteByte(0xF1); // Value = LogOn
+                ms.Write(BitConverter.GetBytes((uint)0), 0, 4);
+                ms.Write(BitConverter.GetBytes((uint)0), 0, 4);
+                ms.Write(payload, 0, payload.Length);
+                ms.Write(new byte[] { 0xB8, 0x8B, 0xC9, 0x9C }, 0, 4);
+                return ms.ToArray();
+            }
         }
     }
+    
 
     public struct TelegramHeader
     {
