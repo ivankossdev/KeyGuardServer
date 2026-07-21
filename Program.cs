@@ -196,6 +196,12 @@ namespace KeyGuardServer
                     // payload может содержать структуру, но пока просто выведем
                     Console.WriteLine($"    Payload: {BitConverter.ToString(payload)}");
                 }
+
+                if (header.Cmd == 0x65 && header.Ident == 0x01 && header.Value == 0x08)
+                {
+                    Console.WriteLine("  <- Ответ на полный запрос состояния клиентов (Cmd=0x65)");
+                    Console.WriteLine($"    Payload: {BitConverter.ToString(payload)}");
+                }
             };
 
             server.Start();
@@ -211,6 +217,8 @@ namespace KeyGuardServer
             Console.WriteLine("  readkey <serial> <addr>  - прочитать ключ по адресу");
             Console.WriteLine("  unknown <serial>         - запросить незарегистрированные ключи");
             Console.WriteLine("  subscribe <serial>       - отправить подписку вручную");
+            Console.WriteLine("  fullstate <serial>       - отправить полный запрос состояния клиентов (payload 234)");
+            Console.WriteLine("  statetest <serial>      - отправить полную последовательность (пустая+полная 0x65 + state)");
             Console.WriteLine("  exit                     - выход");
 
             await Task.WhenAny(consoleTask, Task.Delay(-1, cts.Token));
@@ -272,6 +280,11 @@ namespace KeyGuardServer
 
                     switch (command)
                     {
+                        case "statetest":
+                            // Аналогично state, но можно отдельно
+                            // Используем ту же логику, что и в state
+                            goto case "state"; // или скопировать код
+
                         case "state":
                             // 1. Подписка
                             Console.WriteLine("  -> Отправляем подписку...");
@@ -279,13 +292,19 @@ namespace KeyGuardServer
                             await session.SendAsync(subCmd);
                             await Task.Delay(100);
 
-                            // 2. Запрос состояния клиентов
-                            Console.WriteLine("  -> Отправляем запрос состояния клиентов...");
-                            byte[] clientStateCmd = TelegramHelper.BuildClientStateCommand(serial, acnt);
-                            await session.SendAsync(clientStateCmd);
+                            // 2. Пустая 0x65
+                            Console.WriteLine("  -> Отправляем пустую команду 0x65...");
+                            byte[] emptyCmd = TelegramHelper.BuildClientStateEmptyCommand(serial, acnt);
+                            await session.SendAsync(emptyCmd);
                             await Task.Delay(100);
 
-                            // 3. Запрос состояния устройства
+                            // 3. Полная 0x65
+                            Console.WriteLine("  -> Отправляем полную команду 0x65...");
+                            byte[] fullCmd = TelegramHelper.BuildClientStateFullCommand(serial, acnt);
+                            await session.SendAsync(fullCmd);
+                            await Task.Delay(100);
+
+                            // 4. Запрос состояния устройства
                             Console.WriteLine("  -> Отправляем запрос состояния устройства...");
                             byte[] stateCmd = TelegramHelper.BuildDeviceStateCommand(serial, acnt);
                             await session.SendAsync(stateCmd);
@@ -347,6 +366,13 @@ namespace KeyGuardServer
                             Console.WriteLine($"  Отправка: {BitConverter.ToString(clientStateCmdManual)}");
                             await session.SendAsync(clientStateCmdManual);
                             Console.WriteLine($"Запрос состояния клиентов отправлен устройству 0x{serial:X8}");
+                            break;
+
+                        case "fullstate":
+                            byte[] fullStateCmd = TelegramHelper.BuildClientStateFullCommand(serial, acnt);
+                            Console.WriteLine($"  Отправка fullstate: {BitConverter.ToString(fullStateCmd)}");
+                            await session.SendAsync(fullStateCmd);
+                            Console.WriteLine($"Полный запрос состояния клиентов отправлен устройству 0x{serial:X8}");
                             break;
 
                         default:
