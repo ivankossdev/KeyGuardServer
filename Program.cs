@@ -1,20 +1,22 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
+using System.Net;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace KeyGuardTcpServer
+namespace KeyGuardServer
 {
     class Program
     {
         private static uint _lastAcnt = 0;
+        private static readonly ConcurrentDictionary<uint, ClientSession> _sessions = new();
 
         static async Task Main(string[] args)
         {
+            // Если порт 8000 занят, поменяйте на другой (например, 8001)
             int port = 8000;
             var server = new KeyGuardTcpServer(port);
-            var sessions = new ConcurrentDictionary<uint, ClientSession>();
             var cts = new CancellationTokenSource();
 
             Console.CancelKeyPress += (sender, e) =>
@@ -44,9 +46,24 @@ namespace KeyGuardTcpServer
                 if (header.Acnt != 0)
                     _lastAcnt = header.Acnt;
 
-                if (header.Src != 0 && header.Src != 0xF0000000)
+                // Сохраняем сессию по src устройства
+                if (header.Src != 0 && (header.Src & 0xF0000000) != 0xF0000000) // только устройство, не сервер
                 {
-                    sessions[header.Src] = e.Session;
+                    bool isNew = _sessions.TryAdd(header.Src, e.Session);
+                    if (isNew)
+                    {
+                        Console.WriteLine($"  -> Новая сессия для устройства 0x{header.Src:X8}");
+                        // Отправляем подписку при первом подключении
+                        Console.WriteLine("  -> Отправляем команду подписки...");
+                        byte[] subCmd = TelegramHelper.BuildSubscribeCommand(header.Src, 0);
+                        await e.Session.SendAsync(subCmd);
+                        Console.WriteLine("  -> Подписка отправлена.");
+                    }
+                    else
+                    {
+                        _sessions[header.Src] = e.Session; // обновляем
+                        Console.WriteLine($"  -> Сессия для устройства 0x{header.Src:X8} обновлена");
+                    }
                 }
 
                 Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Получена телеграмма от {e.RemoteEndPoint}:");
@@ -58,45 +75,36 @@ namespace KeyGuardTcpServer
                 if (header.Cmd == 0xA2 && header.Ident == 0xE5 && header.Value == 0x31)
                 {
                     Console.WriteLine("  -> Отвечаем на WatchDog");
-                    byte[] ack = TelegramHelper.BuildWatchDogResponse(e.Telegram, header.Src, header.Dst, header.Ref);
+                    byte[] ack = TelegramHelper.BuildWatchDogResponse(header.Src, header.Ref, _lastAcnt);
                     await e.Session.SendAsync(ack);
                 }
 
-                // ---- Card Present -> открыть дверцу ----
-                if (header.Cmd == 0x80 && header.Ident == 0x03 && header.Value == 0x80)
+                // ---- LogOn ответ ----
+                if (header.Cmd == 0xA0 && header.Ident == 0xE0 && header.Value == 0xF1)
+                    Console.WriteLine("  <- LogOn подтверждён устройством");
+                if (header.Cmd == 0xA6 && header.Ident == 0xE0 && header.Value == 0xF1)
+                    Console.WriteLine("  <- LogOn отклонён (NAC)");
+
+                // ---- Ответ на запрос состояния устройства (Cmd=0xF3) ----
+                if (header.Cmd == 0xF3 && header.Ident == 0x00 && header.Value == 0xF0)
                 {
-                    if (payload.Length >= 4)
+                    Console.WriteLine("  <- Ответ на запрос состояния устройства (Cmd=0xF3):");
+                    if (payload.Length >= 32)
                     {
-                        uint readerAddr = BitConverter.ToUInt32(payload, 0);
-                        Console.WriteLine($"  -> Карта приложена к считывателю {readerAddr}. Открываем дверцу...");
-                        byte[] openDoorPayload = BitConverter.GetBytes(readerAddr);
-                        byte[] command = TelegramHelper.BuildCommandTelegram(
-                            dstSerial: header.Src,
-                            ident: 0x03,
-                            value: 0x35,
-                            acnt: _lastAcnt,
-                            payload: openDoorPayload
-                        );
-                        await e.Session.SendAsync(command);
-                        Console.WriteLine("  -> Команда открытия двери отправлена.");
+                        uint sysNumber = BitConverter.ToUInt32(payload, 0);
+                        uint number = BitConverter.ToUInt32(payload, 4);
+                        uint serNumber = BitConverter.ToUInt32(payload, 8);
+                        ushort type = BitConverter.ToUInt16(payload, 12);
+                        byte version = payload[14];
+                        byte subversion = payload[15];
+                        string name = Encoding.ASCII.GetString(payload, 16, 20).TrimEnd('\0');
+                        Console.WriteLine($"    Система: {sysNumber}, Номер: {number}, Серийный: 0x{serNumber:X8}");
+                        Console.WriteLine($"    Тип: 0x{type:X4}, Версия: {version}.{subversion}, Имя: {name}");
                     }
                     else
                     {
-                        Console.WriteLine("  -> Payload слишком короткий для чтения адреса считывателя.");
+                        Console.WriteLine($"    Payload слишком короткий ({payload.Length} байт)");
                     }
-                }
-
-                // ---- Запрос состояния зоны ключей (Value_F6) ----
-                if (header.Cmd == 0x82 && header.Ident == 0x0F && header.Value == 0xF6)
-                {
-                    byte[] zoneStatePayload = new byte[4 + 4 + 1 + 24 + 48];
-                    Buffer.BlockCopy(BitConverter.GetBytes(0u), 0, zoneStatePayload, 0, 4);
-                    Buffer.BlockCopy(BitConverter.GetBytes(0u), 0, zoneStatePayload, 4, 4);
-                    zoneStatePayload[8] = 0x00; // state = 0 (снята)
-                    // Остальное нули
-                    byte[] response = TelegramHelper.BuildInquiryResponse(header.Src, 0x0F, 0xF6, header.Ref, _lastAcnt, zoneStatePayload);
-                    await e.Session.SendAsync(response);
-                    Console.WriteLine($"  -> Отправлен ответ на запрос зоны (Ref={header.Ref})");
                 }
 
                 // ---- Ответ на чтение (Value = 0xE2) ----
@@ -128,24 +136,6 @@ namespace KeyGuardTcpServer
                                 Console.WriteLine($"    Payload слишком короткий для ключа ({payload.Length} байт)");
                             break;
 
-                        case 0x0E: // Список ключей
-                            if (payload.Length >= 36)
-                            {
-                                uint listAddr = BitConverter.ToUInt32(payload, 0);
-                                ushort textIndex = BitConverter.ToUInt16(payload, 4);
-                                Console.WriteLine($"    Список ключей: addr={listAddr}, textIndex={textIndex}");
-                                Console.Write("    Содержимое: ");
-                                for (int i = 0; i < 15; i++)
-                                {
-                                    ushort item = BitConverter.ToUInt16(payload, 6 + i * 2);
-                                    Console.Write($"{item:X4} ");
-                                }
-                                Console.WriteLine();
-                            }
-                            else
-                                Console.WriteLine($"    Payload слишком короткий для списка ключей ({payload.Length} байт)");
-                            break;
-
                         case 0xFE: // Заголовок
                             if (payload.Length >= 132)
                             {
@@ -166,28 +156,13 @@ namespace KeyGuardTcpServer
                                 Console.WriteLine($"    Payload слишком короткий для заголовка ({payload.Length} байт)");
                             break;
 
-                        case 0x01: // Устройство
-                            if (payload.Length >= 62)
-                            {
-                                uint addr = BitConverter.ToUInt32(payload, 0);
-                                uint ser = BitConverter.ToUInt32(payload, 4);
-                                ushort type = BitConverter.ToUInt16(payload, 8);
-                                uint unitNumber = BitConverter.ToUInt32(payload, 10);
-                                string name = Encoding.ASCII.GetString(payload, 28, 24).TrimEnd('\0');
-                                Console.WriteLine($"    Устройство: addr={addr}, ser=0x{ser:X8}, type=0x{type:X4}, unit={unitNumber}");
-                                Console.WriteLine($"    Имя: {name}");
-                            }
-                            else
-                                Console.WriteLine($"    Payload слишком короткий для устройства ({payload.Length} байт)");
-                            break;
-
                         default:
                             Console.WriteLine($"    Данные (первые 32 байта): {BitConverter.ToString(payload.Length > 32 ? payload[0..32] : payload)}");
                             break;
                     }
                 }
 
-                // ---- Ответ на запрос неизвестных ключей (Value = 0x73) ----
+                // ---- Ответ на запрос неизвестных ключей ----
                 if ((header.Cmd == 0x83 || header.Cmd == 0x85) && header.Ident == 0x0F && header.Value == 0x73)
                 {
                     if (payload.Length >= 14)
@@ -200,12 +175,10 @@ namespace KeyGuardTcpServer
                         Console.WriteLine($"    Неизвестный ключ: addr={addr}, module={module}, cell={cell}, iButton={BitConverter.ToString(ibutton)}");
                     }
                     else
-                    {
                         Console.WriteLine($"    Payload слишком короткий для неизвестного ключа ({payload.Length} байт)");
-                    }
                 }
 
-                // ---- Подтверждение записи (Value = 0xE1) ----
+                // ---- Подтверждение записи ----
                 if (header.Cmd == 0x90 && header.Value == 0xE1)
                 {
                     Console.WriteLine($"  <- Подтверждение записи (Ident=0x{header.Ident:X2})");
@@ -215,14 +188,30 @@ namespace KeyGuardTcpServer
                         Console.WriteLine($"    Запись выполнена для элемента с адресом {addr}");
                     }
                 }
+
+                // ---- Ответ на запрос состояния клиентов ----
+                if (header.Cmd == 0x65 && header.Ident == 0x01 && header.Value == 0x08)
+                {
+                    Console.WriteLine("  <- Ответ на запрос состояния клиентов (Cmd=0x65)");
+                    // payload может содержать структуру, но пока просто выведем
+                    Console.WriteLine($"    Payload: {BitConverter.ToString(payload)}");
+                }
             };
 
             server.Start();
 
-            var consoleTask = InteractiveConsole(sessions, cts.Token);
+            var consoleTask = InteractiveConsole(cts.Token);
 
-            Console.WriteLine("Сервер запущен. Для управления введите команду в консоли.");
-            Console.WriteLine("Для выхода введите 'exit' или нажмите Ctrl+C.");
+            Console.WriteLine("Сервер запущен. Доступные команды:");
+            Console.WriteLine("  list                     - список подключённых устройств");
+            Console.WriteLine("  state                    - запросить состояние устройства (авто с подпиской)");
+            Console.WriteLine("  clientstate <serial>     - запросить состояние клиентов (Cmd=0x65)");
+            Console.WriteLine("  logon <serial> [sysNum]  - отправить LogOn (sysNum по умолчанию 0)");
+            Console.WriteLine("  readheader <serial>      - прочитать заголовок БД");
+            Console.WriteLine("  readkey <serial> <addr>  - прочитать ключ по адресу");
+            Console.WriteLine("  unknown <serial>         - запросить незарегистрированные ключи");
+            Console.WriteLine("  subscribe <serial>       - отправить подписку вручную");
+            Console.WriteLine("  exit                     - выход");
 
             await Task.WhenAny(consoleTask, Task.Delay(-1, cts.Token));
 
@@ -234,30 +223,14 @@ namespace KeyGuardTcpServer
             Console.WriteLine("Сервер остановлен.");
         }
 
-        // ==================== ИНТЕРАКТИВНАЯ КОНСОЛЬ ====================
-        private static async Task InteractiveConsole(ConcurrentDictionary<uint, ClientSession> sessions, CancellationToken cancellationToken)
+        private static async Task InteractiveConsole(CancellationToken cancellationToken)
         {
             while (!cancellationToken.IsCancellationRequested)
             {
-                Console.WriteLine("\nВведите команду:");
-                Console.WriteLine("  open <serial> <reader>        - открыть дверцу");
-                Console.WriteLine("  issue <serial> <key>          - выдать ключ");
-                Console.WriteLine("  return <serial> <key>         - сдать ключ");
-                Console.WriteLine("  readkeylist <serial> <addr>   - прочитать список ключей по адресу");
-                Console.WriteLine("  readkey <serial> <addr>       - прочитать ключ по адресу");
-                Console.WriteLine("  readallkeys <serial>          - прочитать все ключи (последовательно)");
-                Console.WriteLine("  readheader <serial>           - прочитать заголовок БД");
-                Console.WriteLine("  unknown <serial>              - запросить незарегистрированные ключи");
-                Console.WriteLine("  readdevice <serial>           - запросить устройство");
-                Console.WriteLine("  writedevice <serial> <number> - записать устройство (серийник, номер)");
-                Console.WriteLine("  logon <serial>                - отправить LogOn (если нужно)");
-                Console.WriteLine("  list                          - список подключённых устройств");
-                Console.WriteLine("  exit                          - выход");
-
-                
+                Console.Write("\n> ");
                 var readTask = Task.Run(() => Console.ReadLine());
                 var completedTask = await Task.WhenAny(readTask, Task.Delay(-1, cancellationToken));
-                
+
                 if (completedTask == readTask)
                 {
                     string? input = await readTask;
@@ -271,14 +244,14 @@ namespace KeyGuardTcpServer
                     if (command == "list")
                     {
                         Console.WriteLine("Подключённые устройства (src):");
-                        foreach (var kv in sessions)
+                        foreach (var kv in _sessions)
                             Console.WriteLine($"  {kv.Key:X8} - сессия {kv.Value.Id}");
                         continue;
                     }
 
                     if (parts.Length < 2)
                     {
-                        Console.WriteLine("Недостаточно аргументов.");
+                        Console.WriteLine("Недостаточно аргументов. Укажите серийный номер устройства.");
                         continue;
                     }
 
@@ -289,7 +262,7 @@ namespace KeyGuardTcpServer
                     else
                         serial = Convert.ToUInt32(serialStr);
 
-                    if (!sessions.TryGetValue(serial, out ClientSession? session))
+                    if (!_sessions.TryGetValue(serial, out ClientSession? session))
                     {
                         Console.WriteLine($"Устройство с серийным номером 0x{serial:X8} не найдено.");
                         continue;
@@ -299,47 +272,47 @@ namespace KeyGuardTcpServer
 
                     switch (command)
                     {
-                        case "open":
-                        case "issue":
-                        case "return":
-                            if (parts.Length < 3)
-                            {
-                                Console.WriteLine("Укажите адрес элемента.");
-                                break;
-                            }
-                            uint addr = Convert.ToUInt32(parts[2]);
-                            byte cmdIdent = 0, cmdValue = 0;
-                            switch (command)
-                            {
-                                case "open":  cmdIdent = 0x03; cmdValue = 0x35; break;
-                                case "issue": cmdIdent = 0x0F; cmdValue = 0x32; break;
-                                case "return":cmdIdent = 0x0F; cmdValue = 0x72; break;
-                            }
-                            byte[] payload = BitConverter.GetBytes(addr);
-                            byte[] cmd = TelegramHelper.BuildCommandTelegram(serial, cmdIdent, cmdValue, acnt, payload);
-                            Console.WriteLine($"  Отправка: {BitConverter.ToString(cmd)}");
-                            await session.SendAsync(cmd);
-                            Console.WriteLine($"Команда {command} отправлена устройству 0x{serial:X8} (acnt=0x{acnt:X8})");
+                        case "state":
+                            // 1. Подписка
+                            Console.WriteLine("  -> Отправляем подписку...");
+                            byte[] subCmd = TelegramHelper.BuildSubscribeCommand(serial, acnt);
+                            await session.SendAsync(subCmd);
+                            await Task.Delay(100);
+
+                            // 2. Запрос состояния клиентов
+                            Console.WriteLine("  -> Отправляем запрос состояния клиентов...");
+                            byte[] clientStateCmd = TelegramHelper.BuildClientStateCommand(serial, acnt);
+                            await session.SendAsync(clientStateCmd);
+                            await Task.Delay(100);
+
+                            // 3. Запрос состояния устройства
+                            Console.WriteLine("  -> Отправляем запрос состояния устройства...");
+                            byte[] stateCmd = TelegramHelper.BuildDeviceStateCommand(serial, acnt);
+                            await session.SendAsync(stateCmd);
+                            Console.WriteLine($"Запрос состояния отправлен устройству 0x{serial:X8}");
                             break;
 
-                        case "readkeylist":
-                        case "readkey":
-                            if (parts.Length < 3)
-                            {
-                                Console.WriteLine("Укажите адрес (индекс) элемента.");
-                                break;
-                            }
-                            uint readAddr = Convert.ToUInt32(parts[2]);
-                            byte ident = command == "readkeylist" ? (byte)0x0E : (byte)0x0F;
-                            byte[] readCmd = TelegramHelper.BuildReadCommand(serial, ident, readAddr, acnt);
-                            Console.WriteLine($"  Отправка: {BitConverter.ToString(readCmd)}");
-                            await session.SendAsync(readCmd);
-                            Console.WriteLine($"Команда чтения {command} отправлена (адрес {readAddr})");
+                        case "subscribe":
+                            byte[] subCmdManual = TelegramHelper.BuildSubscribeCommand(serial, acnt);
+                            Console.WriteLine($"  Отправка подписки: {BitConverter.ToString(subCmdManual)}");
+                            await session.SendAsync(subCmdManual);
+                            Console.WriteLine($"Подписка отправлена устройству 0x{serial:X8}");
                             break;
 
-                        case "readallkeys":
-                            Console.WriteLine("Начинаем последовательное чтение всех ключей...");
-                            await ReadAllKeysAsync(session, serial, acnt);
+                        case "logon":
+                            uint sysNumber = 0;
+                            if (parts.Length >= 3)
+                            {
+                                string sysStr = parts[2];
+                                if (sysStr.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+                                    sysNumber = Convert.ToUInt32(sysStr.Substring(2), 16);
+                                else
+                                    sysNumber = Convert.ToUInt32(sysStr);
+                            }
+                            byte[] logonCmd = TelegramHelper.BuildLogOnCommand(serial, sysNumber);
+                            Console.WriteLine($"  Отправка LogOn с sysNumber=0x{sysNumber:X8}: {BitConverter.ToString(logonCmd)}");
+                            await session.SendAsync(logonCmd);
+                            Console.WriteLine($"LogOn отправлен устройству 0x{serial:X8}");
                             break;
 
                         case "readheader":
@@ -349,24 +322,17 @@ namespace KeyGuardTcpServer
                             Console.WriteLine($"Команда чтения заголовка отправлена (acnt=0x{acnt:X8})");
                             break;
 
-                        case "readdevice":
-                            byte[] deviceCmd = TelegramHelper.BuildReadCommand(serial, 0x01, 1, acnt);
-                            Console.WriteLine($"  Отправка: {BitConverter.ToString(deviceCmd)}");
-                            await session.SendAsync(deviceCmd);
-                            Console.WriteLine($"Команда чтения устройства отправлена (acnt=0x{acnt:X8})");
-                            break;
-
-                        case "writedevice":
+                        case "readkey":
                             if (parts.Length < 3)
                             {
-                                Console.WriteLine("Укажите номер устройства.");
+                                Console.WriteLine("Укажите адрес (индекс) ключа.");
                                 break;
                             }
-                            uint devNumber = Convert.ToUInt32(parts[2]);
-                            byte[] writeCmd = TelegramHelper.BuildDeviceWriteCommand(serial, serial, devNumber, "KeyGuardDevice");
-                            Console.WriteLine($"  Отправка: {BitConverter.ToString(writeCmd)}");
-                            await session.SendAsync(writeCmd);
-                            Console.WriteLine($"Команда записи устройства отправлена (серийный=0x{serial:X8}, номер={devNumber})");
+                            uint readAddr = Convert.ToUInt32(parts[2]);
+                            byte[] readCmd = TelegramHelper.BuildReadCommand(serial, 0x0F, readAddr, acnt);
+                            Console.WriteLine($"  Отправка: {BitConverter.ToString(readCmd)}");
+                            await session.SendAsync(readCmd);
+                            Console.WriteLine($"Команда чтения ключа отправлена (адрес {readAddr})");
                             break;
 
                         case "unknown":
@@ -376,11 +342,11 @@ namespace KeyGuardTcpServer
                             Console.WriteLine($"Запрос неизвестных ключей отправлен устройству 0x{serial:X8}");
                             break;
 
-                        case "logon":
-                            byte[] logonCmd = TelegramHelper.BuildLogOnCommand(serial, 0);
-                            Console.WriteLine($"  Отправка: {BitConverter.ToString(logonCmd)}");
-                            await session.SendAsync(logonCmd);
-                            Console.WriteLine("LogOn отправлен.");
+                        case "clientstate":
+                            byte[] clientStateCmdManual = TelegramHelper.BuildClientStateCommand(serial, acnt);
+                            Console.WriteLine($"  Отправка: {BitConverter.ToString(clientStateCmdManual)}");
+                            await session.SendAsync(clientStateCmdManual);
+                            Console.WriteLine($"Запрос состояния клиентов отправлен устройству 0x{serial:X8}");
                             break;
 
                         default:
@@ -389,19 +355,6 @@ namespace KeyGuardTcpServer
                     }
                 }
             }
-        }
-
-        private static async Task ReadAllKeysAsync(ClientSession session, uint serial, uint acnt)
-        {
-            const int maxKeys = 100;
-            for (uint i = 1; i <= maxKeys; i++)
-            {
-                byte[] readCmd = TelegramHelper.BuildReadCommand(serial, 0x0F, i, acnt);
-                await session.SendAsync(readCmd);
-                Console.WriteLine($"Запрос ключа #{i} отправлен.");
-                await Task.Delay(200);
-            }
-            Console.WriteLine("Цикл чтения завершён.");
         }
     }
 }

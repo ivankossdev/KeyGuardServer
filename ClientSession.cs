@@ -5,7 +5,7 @@ using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace KeyGuardTcpServer
+namespace KeyGuardServer
 {
     public class ClientSession : IDisposable
     {
@@ -15,6 +15,7 @@ namespace KeyGuardTcpServer
         private readonly byte[] _readBuffer = new byte[4096];
         private readonly List<byte> _accumulator = new List<byte>();
         private readonly Guid _id = Guid.NewGuid();
+        private bool _disposed = false;
 
         public Guid Id => _id;
 
@@ -26,9 +27,7 @@ namespace KeyGuardTcpServer
             _client = client ?? throw new ArgumentNullException(nameof(client));
             _server = server ?? throw new ArgumentNullException(nameof(server));
             _stream = client.GetStream() ?? throw new InvalidOperationException("Unable to get network stream");
-
-            var remoteEndPoint = client.Client?.RemoteEndPoint;
-            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Клиент подключён: {remoteEndPoint?.ToString() ?? "unknown"}");
+            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Клиент подключён: {client.Client?.RemoteEndPoint} (Id: {_id})");
         }
 
         public async Task ProcessAsync(CancellationToken cancellationToken)
@@ -127,17 +126,37 @@ namespace KeyGuardTcpServer
             if (telegram == null)
                 throw new ArgumentNullException(nameof(telegram));
 
-            if (_client.Connected)
+            if (_disposed || !_client.Connected)
+            {
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Попытка отправки в закрытую сессию {Id}");
+                return;
+            }
+
+            try
             {
                 await _stream.WriteAsync(telegram, 0, telegram.Length);
                 await _stream.FlushAsync();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Ошибка отправки в сессии {Id}: {ex.Message}");
+                Dispose();
             }
         }
 
         public void Dispose()
         {
-            _client?.Close();
-            _stream?.Dispose();
+            if (_disposed) return;
+            _disposed = true;
+
+            try
+            {
+                _client?.Close();
+                _stream?.Dispose();
+            }
+            catch { }
+
+            _server.OnSessionClosed(this);
             Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Клиент {Id} отключён.");
         }
     }

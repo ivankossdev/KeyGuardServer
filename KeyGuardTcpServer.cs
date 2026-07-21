@@ -5,7 +5,7 @@ using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace KeyGuardTcpServer
+namespace KeyGuardServer
 {
     public class KeyGuardTcpServer : IDisposable
     {
@@ -14,6 +14,7 @@ namespace KeyGuardTcpServer
         private readonly ConcurrentDictionary<Guid, ClientSession> _sessions = new ConcurrentDictionary<Guid, ClientSession>();
 
         public event EventHandler<TelegramEventArgs> TelegramReceived = delegate { };
+        public event EventHandler<SessionClosedEventArgs> SessionClosed = delegate { };
 
         public KeyGuardTcpServer(int port)
         {
@@ -35,8 +36,14 @@ namespace KeyGuardTcpServer
                 {
                     var tcpClient = await _listener.AcceptTcpClientAsync();
                     var session = new ClientSession(tcpClient, this);
-                    _sessions.TryAdd(session.Id, session);
-                    _ = session.ProcessAsync(_cts.Token);
+                    if (_sessions.TryAdd(session.Id, session))
+                    {
+                        _ = session.ProcessAsync(_cts.Token);
+                    }
+                    else
+                    {
+                        session.Dispose();
+                    }
                 }
                 catch (OperationCanceledException) { break; }
                 catch (Exception ex)
@@ -51,12 +58,19 @@ namespace KeyGuardTcpServer
             TelegramReceived?.Invoke(this, new TelegramEventArgs(telegram, remoteEndPoint, session));
         }
 
+        internal void OnSessionClosed(ClientSession session)
+        {
+            if (session == null) return;
+            bool removed = _sessions.TryRemove(session.Id, out _);
+            SessionClosed?.Invoke(this, new SessionClosedEventArgs(session.Id, removed));
+        }
+
         public void Dispose()
         {
             _cts.Cancel();
             _listener.Stop();
-            foreach (var s in _sessions.Values)
-                s.Dispose();
+            foreach (var session in _sessions.Values)
+                session.Dispose();
             _sessions.Clear();
         }
     }

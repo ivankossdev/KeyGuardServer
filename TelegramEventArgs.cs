@@ -1,7 +1,7 @@
 using System;
 using System.Net;
 
-namespace KeyGuardTcpServer
+namespace KeyGuardServer
 {
     public class TelegramEventArgs : EventArgs
     {
