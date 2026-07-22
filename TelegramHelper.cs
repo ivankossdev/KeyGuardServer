@@ -7,8 +7,6 @@ namespace KeyGuardServer
     {
         private static ushort _refCounter = 0;
         private static readonly object _refLock = new object();
-        
-        // Константы сервера из логов
         private const uint SERVER_SRC = 0xF0000005;
         private const byte DEFAULT_VERS = 0;
 
@@ -78,7 +76,6 @@ namespace KeyGuardServer
         private static byte[] BuildRawTelegram(byte cmd, byte ident, byte value, uint dstSerial, ushort refNum, uint acnt, byte[] payload, byte vers = DEFAULT_VERS, uint src = SERVER_SRC)
         {
             ushort len = (ushort)(32 + payload.Length);
-            // Время всегда 0 в запросах от сервера (как в логах)
             uint time = 0;
 
             using (var ms = new MemoryStream())
@@ -88,13 +85,13 @@ namespace KeyGuardServer
                 ms.Write(BitConverter.GetBytes((ushort)0), 0, 2);
                 ms.Write(BitConverter.GetBytes((uint)0), 0, 4);
                 ms.Write(BitConverter.GetBytes((ushort)0), 0, 2);
-                ms.WriteByte(0);
+                ms.WriteByte(0x80); // life = 128
                 ms.WriteByte(vers);
                 ms.Write(BitConverter.GetBytes(len), 0, 2);
                 ms.Write(BitConverter.GetBytes(src), 0, 4);
                 ms.Write(BitConverter.GetBytes(dstSerial), 0, 4);
                 ms.Write(BitConverter.GetBytes(refNum), 0, 2);
-                ms.WriteByte(0); // bcc placeholder
+                ms.WriteByte(0);
                 ms.WriteByte(cmd);
                 ms.WriteByte(ident);
                 ms.WriteByte(value);
@@ -105,50 +102,11 @@ namespace KeyGuardServer
 
                 byte[] fullPacket = ms.ToArray();
                 byte bcc = 0;
-                for (int i = 4; i <= 30; i++) // включая bcc (пока 0)
+                for (int i = 4; i <= 29; i++)
                     bcc ^= fullPacket[i];
                 fullPacket[30] = bcc;
-                
                 return fullPacket;
             }
-        }
-
-        public static byte[] BuildClientStateFullCommand(uint dstSerial, uint acnt = 0)
-        {
-            // Payload из лога (первые 4 байта 0x00, потом остальные 198 байт)
-            byte[] payload = new byte[202]; // 4 + 198 = 202
-            // Заполняем нулями первые 4 байта (уже по умолчанию)
-            // Копируем остальные байты из лога, начиная с 0xC0
-            byte[] data = new byte[]
-            {
-                0xC0,0xA8,0x00,0x0E,0x05,0x00,0x01,0x00,0xA4,0x33,0x00,0xFC,
-                0x00,0x80,0x1F,0x00,0x20,0x40,0x00,0x04,0x00,0x07,0x00,0x93,
-                0x00,0x92,0x00,0xFF,0x3F,0xFF,0x3F,0x33,0x00,0x00,0x00,0xFF,
-                0x3F,0x00,0x00,0xFF,0x3F,0xFF,0x3F,0xFF,0x3F,0xFF,0x3F,0x50,
-                0x90,0x00,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-                0x00,0x00,0x00,0x00,0x00,0x00,0x60,0x00,0x00,0x00,0x00,0x00,
-                0x00,0x00,0x00,0x21,0x00,0x09,0x00,0x0F,0x00,0x00,0x00,0x00,
-                0x00,0x05,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0xC0,0x48,0x00,
-                0x80,0x0B,0x00,0x00,0x00,0xA4,0x33,0x00,0x00,0x00,0x00,0x00,
-                0x00,0x00,0x00,0x00,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0x00,
-                0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-                0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-                0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-                0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-                0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-                0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-                0x00,0x00,0x00,0x00,0x00,0x00
-            };
-            // Копируем data в payload, начиная с индекса 4
-            Array.Copy(data, 0, payload, 4, Math.Min(data.Length, payload.Length - 4));
-            // Теперь payload имеет длину 202 байта
-            return BuildRawTelegram(0x65, 0x01, 0x08, dstSerial, GetNextRef(), acnt, payload);
-        }
-
-        public static byte[] BuildClientStateEmptyCommand(uint dstSerial, uint acnt = 0)
-        {
-            byte[] payload = new byte[4] { 0, 0, 0, 0 };
-            return BuildRawTelegram(0x65, 0x01, 0x08, dstSerial, GetNextRef(), acnt, payload);
         }
 
         // ==================== КОМАНДЫ ====================
@@ -197,15 +155,15 @@ namespace KeyGuardServer
             return BuildRawTelegram(0xA1, 0xE0, 0xF1, dstSerial, GetNextRef(), 0, payload);
         }
 
-        // ==================== ДОБАВЛЕННЫЕ МЕТОДЫ ====================
-        // Подписка (как в логах: Cmd=0x61, Ident=0x01, Value=0x03)
+        // ==================== ДОПОЛНИТЕЛЬНЫЕ КОМАНДЫ ====================
+        // Подписка (используется при подключении)
         public static byte[] BuildSubscribeCommand(uint dstSerial, uint acnt = 0, byte lastByte = 0x07)
         {
             byte[] payload = new byte[7] { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, lastByte };
             return BuildRawTelegram(0x61, 0x01, 0x03, dstSerial, GetNextRef(), acnt, payload);
         }
 
-        // Запрос состояния устройства (как в логах: Cmd=0xF2, Ident=0x00, Value=0xF0)
+        // Запрос состояния устройства (Cmd=0xF2, Ident=0x00, Value=0xF0)
         public static byte[] BuildDeviceStateCommand(uint dstSerial, uint acnt = 0)
         {
             byte[] payload = new byte[4] { 0, 0, 0, 0 };
@@ -220,29 +178,20 @@ namespace KeyGuardServer
             Buffer.BlockCopy(BitConverter.GetBytes(serNumber), 0, deviceData, offset, 4); offset += 4;
             Buffer.BlockCopy(BitConverter.GetBytes((ushort)0), 0, deviceData, offset, 2); offset += 2;
             Buffer.BlockCopy(BitConverter.GetBytes(unitNumber), 0, deviceData, offset, 4); offset += 4;
-            offset += 6; // ip
-            offset += 6; // port
+            offset += 6;
+            offset += 6;
             byte[] nameBytes = System.Text.Encoding.ASCII.GetBytes(name);
             Array.Copy(nameBytes, 0, deviceData, offset, Math.Min(nameBytes.Length, 24));
             offset += 24;
-            offset += 2; // Master_index
-            offset += 2; // Reserve_index
-            offset += 4; // out_invers
-            offset += 1; // menu
-            offset += 1; // Silence_Delay
-            offset += 2; // Type_TFT
+            offset += 2;
+            offset += 2;
+            offset += 4;
+            offset += 1;
+            offset += 1;
+            offset += 2;
             if (offset != 62) throw new Exception("Invalid device record length");
             return BuildDatabaseCommand(dstSerial, 0x01, 0xE1, 0, deviceData);
         }
-
-        // ==================== ДОПОЛНИТЕЛЬНЫЕ КОМАНДЫ ====================
-        // Команда запроса структуры состояния связи с клиентами (как в логах)
-        public static byte[] BuildClientStateCommand(uint dstSerial, uint acnt = 0)
-        {
-            byte[] payload = new byte[4] { 0, 0, 0, 0 };
-            return BuildRawTelegram(0x65, 0x01, 0x08, dstSerial, GetNextRef(), acnt, payload);
-        }
-
     }
 
     public struct TelegramHeader
